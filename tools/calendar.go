@@ -58,7 +58,7 @@ func RegisterCalendarTools(s *server.MCPServer) {
 	s.AddTool(respondToEventTool, util.ErrorGuard(calendarRespondToEventHandler))
 }
 
-var calendarService = sync.OnceValue[*calendar.Service](func() *calendar.Service {
+var calendarService = sync.OnceValue(func() *calendar.Service {
 	ctx := context.Background()
 
 	tokenFile := os.Getenv("GOOGLE_TOKEN_FILE")
