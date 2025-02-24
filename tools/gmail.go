@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"encoding/base64"
+
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nguyenvanduocit/google-kit/services"
@@ -23,6 +25,23 @@ func RegisterGmailTools(s *server.MCPServer) {
         mcp.WithString("query", mcp.Required(), mcp.Description("Gmail search query. Follow Gmail's search syntax")),
     )
     s.AddTool(searchTool, util.ErrorGuard(gmailSearchHandler))
+
+    // Read email tool
+    readEmailTool := mcp.NewTool("gmail_read_email",
+        mcp.WithDescription("Read a specific email's full content including headers and body"),
+        mcp.WithString("message_id", mcp.Required(), mcp.Description("ID of the email message to read")),
+        mcp.WithBoolean("include_attachments", mcp.Description("Whether to include attachment information")),
+    )
+    s.AddTool(readEmailTool, util.ErrorGuard(gmailReadEmailHandler))
+
+    // Reply to email tool
+    replyEmailTool := mcp.NewTool("gmail_reply_email",
+        mcp.WithDescription("Reply to a specific email"),
+        mcp.WithString("message_id", mcp.Required(), mcp.Description("ID of the email message to reply to")),
+        mcp.WithString("reply_text", mcp.Required(), mcp.Description("Text content of the reply")),
+        mcp.WithBoolean("reply_all", mcp.Description("Whether to reply to all recipients")),
+    )
+    s.AddTool(replyEmailTool, util.ErrorGuard(gmailReplyEmailHandler))
 
     // Move to spam tool
     spamTool := mcp.NewTool("gmail_move_to_spam",
@@ -72,9 +91,6 @@ func RegisterGmailTools(s *server.MCPServer) {
     )
     s.AddTool(deleteLabelTool, util.ErrorGuard(gmailDeleteLabelHandler))
 }
-
-
-
 
 var gmailService = sync.OnceValue[*gmail.Service](func() *gmail.Service {
 	ctx := context.Background()
@@ -367,4 +383,158 @@ func gmailDeleteLabelHandler(arguments map[string]interface{}) (*mcp.CallToolRes
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully deleted label with ID: %s", labelID)), nil
+}
+
+func gmailReadEmailHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+    messageID, ok := arguments["message_id"].(string)
+    if !ok {
+        return mcp.NewToolResultError("message_id must be a string"), nil
+    }
+
+    includeAttachments, _ := arguments["include_attachments"].(bool)
+
+    // Get the full email message
+    message, err := gmailService().Users.Messages.Get("me", messageID).Format("full").Do()
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to get email: %v", err)), nil
+    }
+
+    var result strings.Builder
+
+    // Extract headers
+    headers := make(map[string]string)
+    for _, header := range message.Payload.Headers {
+        switch header.Name {
+        case "From", "To", "Cc", "Subject", "Date":
+            headers[header.Name] = header.Value
+            result.WriteString(fmt.Sprintf("%s: %s\n", header.Name, header.Value))
+        }
+    }
+    result.WriteString("\n")
+
+    // Extract body
+    body := extractMessageBody(message.Payload)
+    result.WriteString("Body:\n")
+    result.WriteString(body)
+    result.WriteString("\n")
+
+    // Handle attachments if requested
+    if includeAttachments && len(message.Payload.Parts) > 0 {
+        result.WriteString("\nAttachments:\n")
+        for _, part := range message.Payload.Parts {
+            if part.Filename != "" {
+                result.WriteString(fmt.Sprintf("- %s (Size: %d bytes)\n", 
+                    part.Filename, part.Body.Size))
+            }
+        }
+    }
+
+    return mcp.NewToolResultText(result.String()), nil
+}
+
+func extractMessageBody(payload *gmail.MessagePart) string {
+    if payload.MimeType == "text/plain" && payload.Body.Data != "" {
+        data, err := base64.URLEncoding.DecodeString(payload.Body.Data)
+        if err != nil {
+            return fmt.Sprintf("Error decoding body: %v", err)
+        }
+        return string(data)
+    }
+
+    if payload.Parts != nil {
+        for _, part := range payload.Parts {
+            if part.MimeType == "text/plain" {
+                data, err := base64.URLEncoding.DecodeString(part.Body.Data)
+                if err != nil {
+                    continue
+                }
+                return string(data)
+            }
+        }
+    }
+
+    return "No readable text body found"
+}
+
+func gmailReplyEmailHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+    messageID, ok := arguments["message_id"].(string)
+    if !ok {
+        return mcp.NewToolResultError("message_id must be a string"), nil
+    }
+
+    replyText, ok := arguments["reply_text"].(string)
+    if !ok {
+        return mcp.NewToolResultError("reply_text must be a string"), nil
+    }
+
+    replyAll, _ := arguments["reply_all"].(bool)
+
+    // Get the original message to extract headers
+    originalMessage, err := gmailService().Users.Messages.Get("me", messageID).Format("metadata").Do()
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to get original email: %v", err)), nil
+    }
+
+    // Extract necessary headers
+    var from, to, subject, references, messageIDHeader string
+    for _, header := range originalMessage.Payload.Headers {
+        switch header.Name {
+        case "From":
+            to = header.Value // Original sender becomes recipient
+        case "To":
+            from = header.Value // We'll need this for reply-all
+        case "Subject":
+            subject = header.Value
+            if !strings.HasPrefix(strings.ToLower(subject), "re:") {
+                subject = "Re: " + subject
+            }
+        case "Message-ID":
+            messageIDHeader = header.Value
+            references = header.Value
+        case "References":
+            references = header.Value + " " + messageIDHeader
+        }
+    }
+
+    // Create reply message
+    var message gmail.Message
+
+    // Prepare recipients
+    recipients := []string{to}
+    if replyAll {
+        // Add original To recipients (excluding ourselves)
+        originalRecipients := strings.Split(from, ",")
+        for _, recipient := range originalRecipients {
+            recipient = strings.TrimSpace(recipient)
+            if recipient != "" && !strings.Contains(recipient, "me@") {
+                recipients = append(recipients, recipient)
+            }
+        }
+    }
+
+    // Construct email headers
+    headers := make(map[string]string)
+    headers["To"] = strings.Join(recipients, ", ")
+    headers["Subject"] = subject
+    headers["References"] = references
+    headers["In-Reply-To"] = messageIDHeader
+
+    // Construct the raw message
+    var rawMessage strings.Builder
+    for key, value := range headers {
+        rawMessage.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
+    }
+    rawMessage.WriteString("\r\n")
+    rawMessage.WriteString(replyText)
+
+    // Encode the raw message
+    message.Raw = base64.URLEncoding.EncodeToString([]byte(rawMessage.String()))
+
+    // Send the reply
+    _, err = gmailService().Users.Messages.Send("me", &message).Do()
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to send reply: %v", err)), nil
+    }
+
+    return mcp.NewToolResultText("Reply sent successfully"), nil
 }
