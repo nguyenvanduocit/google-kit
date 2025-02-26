@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 
 	"google.golang.org/api/chat/v1"
@@ -13,18 +14,20 @@ import (
 func NewGChatService() (*chat.Service, error) {
 	ctx := context.Background()
 
+	credentialsFile := os.Getenv("GOOGLE_CREDENTIALS_FILE")
+	if credentialsFile == "" {
+		panic("GOOGLE_CREDENTIALS_FILE environment variable must be set")
+	}
+
+	tokenFile := os.Getenv("GOOGLE_TOKEN_FILE")
+	if tokenFile == "" {
+		panic("GOOGLE_TOKEN_FILE environment variable must be set")
+	}
+
+	client := GoogleHttpClient(tokenFile, credentialsFile)
+
 	// Initialize Google Chat API service with default credentials and required scopes
-	srv, err := chat.NewService(ctx, option.WithScopes(
-		chat.ChatAdminSpacesScope,
-		chat.ChatSpacesScope,
-		chat.ChatAdminMembershipsScope,
-		chat.ChatAdminMembershipsReadonlyScope,
-		//chat.ChatAppMembershipsScope,
-		//chat.ChatAppSpacesScope,
-		//chat.ChatAppSpacesCreateScope,
-		chat.ChatMessagesScope,
-		chat.ChatMessagesCreateScope,
-	))
+	srv, err := chat.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat service: %v", err)
 	}

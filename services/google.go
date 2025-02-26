@@ -27,8 +27,30 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 	return tok, err
 }
 
-func ListGoogleScopes() []string {
+func ListChatScopes() []string {
 	return []string{
+		"https://www.googleapis.com/auth/chat.admin.memberships",
+		"https://www.googleapis.com/auth/chat.admin.memberships.readonly",
+		"https://www.googleapis.com/auth/chat.admin.spaces",
+		"https://www.googleapis.com/auth/chat.admin.spaces.readonly",
+		"https://www.googleapis.com/auth/chat.memberships",
+		"https://www.googleapis.com/auth/chat.memberships.app",
+		"https://www.googleapis.com/auth/chat.memberships.readonly",
+		"https://www.googleapis.com/auth/chat.messages",
+		"https://www.googleapis.com/auth/chat.messages.create",
+		"https://www.googleapis.com/auth/chat.messages.reactions",
+		"https://www.googleapis.com/auth/chat.messages.reactions.create",
+		"https://www.googleapis.com/auth/chat.messages.reactions.readonly",
+		"https://www.googleapis.com/auth/chat.messages.readonly",
+		"https://www.googleapis.com/auth/chat.spaces",
+		"https://www.googleapis.com/auth/chat.spaces.create",
+		"https://www.googleapis.com/auth/chat.spaces.readonly",
+		"https://www.googleapis.com/auth/chat.users.readstate",
+		"https://www.googleapis.com/auth/chat.users.readstate.readonly",
+	}
+}
+func ListGoogleScopes() []string {
+	scopes := []string{
 		gmail.GmailLabelsScope,
 		gmail.GmailModifyScope,
 		gmail.MailGoogleComScope,
@@ -41,6 +63,8 @@ func ListGoogleScopes() []string {
 		youtube.YoutubepartnerScope,
 		youtube.YoutubeReadonlyScope,
 	}
+	scopes = append(scopes, ListChatScopes()...)
+	return scopes
 }
 
 func GoogleHttpClient(tokenFile string, credentialsFile string) *http.Client {

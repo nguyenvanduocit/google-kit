@@ -33,6 +33,8 @@ ENABLE_TOOLS=           # Optional: Comma-separated list of tool groups to enabl
 PROXY_URL=             # Optional: HTTP/HTTPS proxy URL if needed
 ```
 
+https://developers.google.com/workspace/chat/authenticate-authorize-chat-user
+
 3. Configure your Claude's config:
 
 ```json
