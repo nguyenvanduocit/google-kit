@@ -109,3 +109,7 @@ Delete a Gmail filter by its ID.
 #### gmail_delete_label
 Delete a Gmail label by its ID.
 
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
