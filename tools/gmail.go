@@ -16,6 +16,7 @@ import (
 	"github.com/nguyenvanduocit/google-kit/util"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
+	"gopkg.in/yaml.v3"
 )
 
 func RegisterGmailTools(s *server.MCPServer) {
@@ -50,46 +51,32 @@ func RegisterGmailTools(s *server.MCPServer) {
     )
     s.AddTool(spamTool, util.ErrorGuard(gmailMoveToSpamHandler))
 
-    // Add create filter tool
-    createFilterTool := mcp.NewTool("gmail_create_filter",
-        mcp.WithDescription("Create a Gmail filter with specified criteria and actions"),
-        mcp.WithString("from", mcp.Description("Filter emails from this sender")),
-        mcp.WithString("to", mcp.Description("Filter emails to this recipient")),
-        mcp.WithString("subject", mcp.Description("Filter emails with this subject")),
-        mcp.WithString("query", mcp.Description("Additional search query criteria")),
-        mcp.WithBoolean("add_label", mcp.Description("Add label to matching messages")),
-        mcp.WithString("label_name", mcp.Description("Name of the label to add (required if add_label is true)")),
-        mcp.WithBoolean("mark_important", mcp.Description("Mark matching messages as important")),
-        mcp.WithBoolean("mark_read", mcp.Description("Mark matching messages as read")),
-        mcp.WithBoolean("archive", mcp.Description("Archive matching messages")),
+    // Unified filter management tool
+    filterTool := mcp.NewTool("gmail_filter",
+        mcp.WithDescription("Manage Gmail filters - create, list, or delete filters"),
+        mcp.WithString("action", mcp.Required(), mcp.Description("Action to perform: create, list, delete")),
+        mcp.WithString("filter_id", mcp.Description("Filter ID (required for delete action)")),
+        mcp.WithString("from", mcp.Description("Filter emails from this sender (create action)")),
+        mcp.WithString("to", mcp.Description("Filter emails to this recipient (create action)")),
+        mcp.WithString("subject", mcp.Description("Filter emails with this subject (create action)")),
+        mcp.WithString("query", mcp.Description("Additional search query criteria (create action)")),
+        mcp.WithBoolean("add_label", mcp.Description("Add label to matching messages (create action)")),
+        mcp.WithString("label_name", mcp.Description("Name of the label to add (create action, required if add_label is true)")),
+        mcp.WithBoolean("mark_important", mcp.Description("Mark matching messages as important (create action)")),
+        mcp.WithBoolean("mark_read", mcp.Description("Mark matching messages as read (create action)")),
+        mcp.WithBoolean("archive", mcp.Description("Archive matching messages (create action)")),
     )
-    s.AddTool(createFilterTool, util.ErrorGuard(gmailCreateFilterHandler))
+    s.AddTool(filterTool, util.ErrorGuard(gmailFilterHandler))
 
-    // List filters tool
-    listFiltersTool := mcp.NewTool("gmail_list_filters",
-        mcp.WithDescription("List all Gmail filters in the account"),
+    // Unified label management tool
+    labelTool := mcp.NewTool("gmail_label",
+        mcp.WithDescription("Manage Gmail labels - list or delete labels"),
+        mcp.WithString("action", mcp.Required(), mcp.Description("Action to perform: list, delete")),
+        mcp.WithString("label_id", mcp.Description("Label ID (required for delete action)")),
     )
-    s.AddTool(listFiltersTool, util.ErrorGuard(gmailListFiltersHandler))
+    s.AddTool(labelTool, util.ErrorGuard(gmailLabelHandler))
 
-    // List labels tool
-    listLabelsTool := mcp.NewTool("gmail_list_labels",
-        mcp.WithDescription("List all Gmail labels in the account"),
-    )
-    s.AddTool(listLabelsTool, util.ErrorGuard(gmailListLabelsHandler))
 
-    // Add delete filter tool
-    deleteFilterTool := mcp.NewTool("gmail_delete_filter",
-        mcp.WithDescription("Delete a Gmail filter by its ID"),
-        mcp.WithString("filter_id", mcp.Required(), mcp.Description("The ID of the filter to delete")),
-    )
-    s.AddTool(deleteFilterTool, util.ErrorGuard(gmailDeleteFilterHandler))
-
-    // Add delete label tool
-    deleteLabelTool := mcp.NewTool("gmail_delete_label",
-        mcp.WithDescription("Delete a Gmail label by its ID"),
-        mcp.WithString("label_id", mcp.Required(), mcp.Description("The ID of the label to delete")),
-    )
-    s.AddTool(deleteLabelTool, util.ErrorGuard(gmailDeleteLabelHandler))
 }
 
 var gmailService = sync.OnceValue[*gmail.Service](func() *gmail.Service {
@@ -130,9 +117,8 @@ func gmailSearchHandler(arguments map[string]interface{}) (*mcp.CallToolResult, 
         return mcp.NewToolResultError(fmt.Sprintf("failed to search emails: %v", err)), nil
     }
 
-    var result strings.Builder
-    result.WriteString(fmt.Sprintf("Found %d emails:\n\n", len(resp.Messages)))
-
+    emails := make([]map[string]interface{}, 0)
+    
     for _, msg := range resp.Messages {
         message, err := gmailService().Users.Messages.Get(user, msg.Id).Do()
         if err != nil {
@@ -140,27 +126,36 @@ func gmailSearchHandler(arguments map[string]interface{}) (*mcp.CallToolResult, 
             continue
         }
 
-        details := make(map[string]string)
+        emailInfo := map[string]interface{}{
+            "id": msg.Id,
+            "snippet": message.Snippet,
+        }
+
         for _, header := range message.Payload.Headers {
             switch header.Name {
             case "From":
-                details["from"] = header.Value
+                emailInfo["from"] = header.Value
             case "Subject":
-                details["subject"] = header.Value
+                emailInfo["subject"] = header.Value
             case "Date":
-                details["date"] = header.Value
+                emailInfo["date"] = header.Value
             }
         }
 
-        result.WriteString(fmt.Sprintf("Message ID: %s\n", msg.Id))
-        result.WriteString(fmt.Sprintf("From: %s\n", details["from"]))
-        result.WriteString(fmt.Sprintf("Subject: %s\n", details["subject"]))
-        result.WriteString(fmt.Sprintf("Date: %s\n", details["date"]))
-        result.WriteString(fmt.Sprintf("Snippet: %s\n", message.Snippet))
-        result.WriteString("-------------------\n")
+        emails = append(emails, emailInfo)
     }
 
-    return mcp.NewToolResultText(result.String()), nil
+    result := map[string]interface{}{
+        "count": len(emails),
+        "emails": emails,
+    }
+
+    yamlResult, err := yaml.Marshal(result)
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to marshal emails: %v", err)), nil
+    }
+
+    return mcp.NewToolResultText(string(yamlResult)), nil
 }
 
 func gmailMoveToSpamHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -187,6 +182,21 @@ func gmailMoveToSpamHandler(arguments map[string]interface{}) (*mcp.CallToolResu
     }
 
     return mcp.NewToolResultText(fmt.Sprintf("Successfully moved %d emails to spam.", len(messageIds))), nil
+}
+
+func gmailFilterHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	action, _ := arguments["action"].(string)
+	
+	switch action {
+	case "create":
+		return gmailCreateFilterHandler(arguments)
+	case "list":
+		return gmailListFiltersHandler(arguments)
+	case "delete":
+		return gmailDeleteFilterHandler(arguments)
+	default:
+		return mcp.NewToolResultError("Invalid action. Must be one of: create, list, delete"), nil
+	}
 }
 
 func gmailCreateFilterHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -283,39 +293,64 @@ func gmailListFiltersHandler(arguments map[string]interface{}) (*mcp.CallToolRes
         return mcp.NewToolResultError(fmt.Sprintf("failed to list filters: %v", err)), nil
     }
 
-    var result strings.Builder
-    result.WriteString(fmt.Sprintf("Found %d filters:\n\n", len(filters.Filter)))
-
+    filtersResult := make([]map[string]interface{}, 0)
+    
     for _, filter := range filters.Filter {
-        result.WriteString(fmt.Sprintf("Filter ID: %s\n", filter.Id))
+        filterInfo := map[string]interface{}{
+            "id": filter.Id,
+            "criteria": map[string]string{},
+            "actions": map[string]interface{}{},
+        }
         
-        // Write criteria
-        result.WriteString("Criteria:\n")
+        // Add criteria
         if filter.Criteria.From != "" {
-            result.WriteString(fmt.Sprintf("  From: %s\n", filter.Criteria.From))
+            filterInfo["criteria"].(map[string]string)["from"] = filter.Criteria.From
         }
         if filter.Criteria.To != "" {
-            result.WriteString(fmt.Sprintf("  To: %s\n", filter.Criteria.To))
+            filterInfo["criteria"].(map[string]string)["to"] = filter.Criteria.To
         }
         if filter.Criteria.Subject != "" {
-            result.WriteString(fmt.Sprintf("  Subject: %s\n", filter.Criteria.Subject))
+            filterInfo["criteria"].(map[string]string)["subject"] = filter.Criteria.Subject
         }
         if filter.Criteria.Query != "" {
-            result.WriteString(fmt.Sprintf("  Query: %s\n", filter.Criteria.Query))
+            filterInfo["criteria"].(map[string]string)["query"] = filter.Criteria.Query
         }
 
-        // Write actions
-        result.WriteString("Actions:\n")
+        // Add actions
         if len(filter.Action.AddLabelIds) > 0 {
-            result.WriteString(fmt.Sprintf("  Add Labels: %s\n", strings.Join(filter.Action.AddLabelIds, ", ")))
+            filterInfo["actions"].(map[string]interface{})["addLabels"] = filter.Action.AddLabelIds
         }
         if len(filter.Action.RemoveLabelIds) > 0 {
-            result.WriteString(fmt.Sprintf("  Remove Labels: %s\n", strings.Join(filter.Action.RemoveLabelIds, ", ")))
+            filterInfo["actions"].(map[string]interface{})["removeLabels"] = filter.Action.RemoveLabelIds
         }
-        result.WriteString("-------------------\n")
+        
+        filtersResult = append(filtersResult, filterInfo)
     }
 
-    return mcp.NewToolResultText(result.String()), nil
+    result := map[string]interface{}{
+        "count": len(filtersResult),
+        "filters": filtersResult,
+    }
+
+    yamlResult, err := yaml.Marshal(result)
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to marshal filters: %v", err)), nil
+    }
+
+    return mcp.NewToolResultText(string(yamlResult)), nil
+}
+
+func gmailLabelHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	action, _ := arguments["action"].(string)
+	
+	switch action {
+	case "list":
+		return gmailListLabelsHandler(arguments)
+	case "delete":
+		return gmailDeleteLabelHandler(arguments)
+	default:
+		return mcp.NewToolResultError("Invalid action. Must be one of: list, delete"), nil
+	}
 }
 
 func gmailListLabelsHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -324,29 +359,38 @@ func gmailListLabelsHandler(arguments map[string]interface{}) (*mcp.CallToolResu
         return mcp.NewToolResultError(fmt.Sprintf("failed to list labels: %v", err)), nil
     }
 
-    var result strings.Builder
-    result.WriteString(fmt.Sprintf("Found %d labels:\n\n", len(labels.Labels)))
+    systemLabels := make([]map[string]interface{}, 0)
+    userLabels := make([]map[string]interface{}, 0)
 
-    // First list system labels
-    result.WriteString("System Labels:\n")
     for _, label := range labels.Labels {
+        labelInfo := map[string]interface{}{
+            "id": label.Id,
+            "name": label.Name,
+        }
+        
+        if label.MessagesTotal > 0 {
+            labelInfo["messagesTotal"] = label.MessagesTotal
+        }
+        
         if label.Type == "system" {
-            result.WriteString(fmt.Sprintf("- %s (ID: %s)\n", label.Name, label.Id))
+            systemLabels = append(systemLabels, labelInfo)
+        } else if label.Type == "user" {
+            userLabels = append(userLabels, labelInfo)
         }
     }
 
-    // Then list user labels
-    result.WriteString("\nUser Labels:\n")
-    for _, label := range labels.Labels {
-        if label.Type == "user" {
-            result.WriteString(fmt.Sprintf("- %s (ID: %s)\n", label.Name, label.Id))
-            if label.MessagesTotal > 0 {
-                result.WriteString(fmt.Sprintf("  Messages: %d\n", label.MessagesTotal))
-            }
-        }
+    result := map[string]interface{}{
+        "count": len(labels.Labels),
+        "systemLabels": systemLabels,
+        "userLabels": userLabels,
     }
 
-    return mcp.NewToolResultText(result.String()), nil
+    yamlResult, err := yaml.Marshal(result)
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to marshal labels: %v", err)), nil
+    }
+
+    return mcp.NewToolResultText(string(yamlResult)), nil
 }
 
 func gmailDeleteFilterHandler(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -399,37 +443,47 @@ func gmailReadEmailHandler(arguments map[string]interface{}) (*mcp.CallToolResul
         return mcp.NewToolResultError(fmt.Sprintf("failed to get email: %v", err)), nil
     }
 
-    var result strings.Builder
+    emailResult := map[string]interface{}{
+        "id": message.Id,
+        "headers": map[string]string{},
+        "body": "",
+    }
 
     // Extract headers
-    headers := make(map[string]string)
     for _, header := range message.Payload.Headers {
         switch header.Name {
         case "From", "To", "Cc", "Subject", "Date":
-            headers[header.Name] = header.Value
-            result.WriteString(fmt.Sprintf("%s: %s\n", header.Name, header.Value))
+            emailResult["headers"].(map[string]string)[header.Name] = header.Value
         }
     }
-    result.WriteString("\n")
 
     // Extract body
-    body := extractMessageBody(message.Payload)
-    result.WriteString("Body:\n")
-    result.WriteString(body)
-    result.WriteString("\n")
+    emailResult["body"] = extractMessageBody(message.Payload)
 
     // Handle attachments if requested
     if includeAttachments && len(message.Payload.Parts) > 0 {
-        result.WriteString("\nAttachments:\n")
+        attachments := make([]map[string]interface{}, 0)
         for _, part := range message.Payload.Parts {
             if part.Filename != "" {
-                result.WriteString(fmt.Sprintf("- %s (Size: %d bytes)\n", 
-                    part.Filename, part.Body.Size))
+                attachmentInfo := map[string]interface{}{
+                    "filename": part.Filename,
+                    "size": part.Body.Size,
+                }
+                attachments = append(attachments, attachmentInfo)
             }
+        }
+        
+        if len(attachments) > 0 {
+            emailResult["attachments"] = attachments
         }
     }
 
-    return mcp.NewToolResultText(result.String()), nil
+    yamlResult, err := yaml.Marshal(emailResult)
+    if err != nil {
+        return mcp.NewToolResultError(fmt.Sprintf("failed to marshal email: %v", err)), nil
+    }
+
+    return mcp.NewToolResultText(string(yamlResult)), nil
 }
 
 func extractMessageBody(payload *gmail.MessagePart) string {

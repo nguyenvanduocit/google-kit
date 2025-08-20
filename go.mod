@@ -7,6 +7,7 @@ require (
 	github.com/mark3labs/mcp-go v0.6.0
 	golang.org/x/oauth2 v0.24.0
 	google.golang.org/api v0.197.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
