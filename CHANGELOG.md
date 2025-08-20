@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/nguyenvanduocit/google-kit/compare/v1.0.0...v1.1.0) (2025-08-20)
+
+
+### Features
+
+* Add Claude Code spec-driven development framework ([1020c51](https://github.com/nguyenvanduocit/google-kit/commit/1020c519196cc00d8165b05ed1e8dee3372b559c))
+
 ## 1.0.0 (2025-03-25)
 
 
